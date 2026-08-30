@@ -70,6 +70,7 @@ class GridRow:
     label: str
     ambiguous: bool = False
     cells: dict[int, str] = field(default_factory=dict)  # column band index -> text
+    markers: dict[int, list[str]] = field(default_factory=dict)  # column band index -> footnote markers
 
 
 @dataclass

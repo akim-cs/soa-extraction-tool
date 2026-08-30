@@ -101,6 +101,21 @@ from memory.
   token path behind a minimum-evidence check (e.g. ≥2 rows carrying
   short-token marks in aligned columns).
 
+### 2026-08-29 — footnotes: definition-line superscript keys raised only 0.4pt (protocol1)
+- **What happened:** marker detection (smaller + raised vs the line body)
+  found every in-cell marker but missed the superscript keys IN the
+  footnote definition lines ("Xᵃ = ..."), so footnote ids got no marker
+  and bindings silently failed. The def-line keys are 8pt raised 0.4pt on
+  a 10pt body; the in-cell ones are 8pt raised 1.1pt on a 9pt body.
+- **Root cause:** raise floor (0.5pt) calibrated on in-cell markers only.
+- **Status:** fixed — floor lowered to 0.3pt, size-shrink requirement
+  kept, so same-line baseline jitter still can't impersonate a marker.
+  Watch on other sponsors' PDFs: a typeset superscript with neither size
+  change nor visible raise is undetectable by geometry alone.
+- **Real fix:** same as the open item above — proper baseline modelling
+  (compare each char's baseline, not its top), revisited if a protocol
+  shows false positives at 0.3pt.
+
 <!--
 Template:
 
