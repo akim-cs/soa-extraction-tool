@@ -31,7 +31,44 @@ from memory.
 
 ## Observed failures
 
-*(none yet — log entries here as they are found, one section per entry)*
+*(found while building; one section per entry)*
+
+### 2026-08-29 — locator: X-mark signal misses X-free tables (protocol9)
+- **What happened:** protocol9's SoA (p26-29, rotated) contains essentially
+  no `X` cell marks (1 found) — its grid uses other glyphs. An X-density
+  locator cannot see this table at all.
+- **Root cause:** cell-mark glyph variety across sponsors; "X" is common
+  but not universal.
+- **Status:** known limitation — protocol9 is still located via
+  keyword + superscript signals (score 8.0 region), but a keyword-free,
+  X-free table would be missed.
+- **Real fix:** a third structural channel — generic short-token column
+  alignment (tokens ≤3 chars of any kind clustered into ≥4 aligned
+  columns). Deferred; noted as generalisation risk.
+
+### 2026-08-29 — locator: superscript density inverts on table pages (protocol1)
+- **What happened:** prose pages in protocol1 report ~120 superscript
+  chars; the actual SoA table pages report 0. Page-median font size is
+  body font on prose pages (so small header/footer text reads as
+  "superscript") but the table cell font on table pages (so nothing reads
+  as superscript).
+- **Root cause:** superscript detection relative to page-median font size.
+- **Status:** fixed in locator scoring — superscripts now corroborate
+  X-mark grids, never nominate a page alone. Still open for Phase 5:
+  per-footnote-marker detection must be line-relative (raised baseline vs
+  neighbouring text), not page-median-relative.
+
+### 2026-08-29 — locator: keyword-only paragraphs surface as a false candidate (protocol1)
+- **What happened:** protocol1 pages 35–36 mention "schedule of events" in
+  body paragraphs (no table), scoring 4.0 and surfacing as candidate #2 —
+  behind the true table region at 12.0, but still on the candidate list.
+- **Root cause:** keyword hits are evidence-only by design, but two
+  adjacent keyword pages can sum over the candidate threshold.
+- **Status:** accepted — ranked below truth, and the extractor will find
+  no grid on those pages, so the pipeline filters it naturally. Multiple
+  candidates are a feature (protocols may contain more than one SoA).
+- **Real fix (if it ever ranks first):** require each candidate to carry
+  at least one structural-signal page before ranking.
 
 <!--
 Template:
