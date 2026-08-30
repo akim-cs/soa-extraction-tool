@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soa-extraction-tool"
+version = "0.1.0"
+description = "Locate and extract the Schedule of Activities from clinical trial protocol PDFs"
+requires-python = ">=3.10"
+dependencies = [
+    "pdfplumber>=0.11",
+    "pymupdf>=1.24",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+llm = ["openai>=1.0"]
+ocr = ["ocrmypdf>=16"]
+
+[tool.setuptools]
+packages = ["soa"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
