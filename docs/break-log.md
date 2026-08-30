@@ -70,6 +70,37 @@ from memory.
 - **Real fix (if it ever ranks first):** require each candidate to carry
   at least one structural-signal page before ranking.
 
+### 2026-08-29 — extractor: three activity labels share one unruled table row (protocol1 p53)
+- **What happened:** "Study drug record / Medications dispensed /
+  Medications returned" occupy three text lines inside ONE ruled row band
+  (no interior rules exist at the line boundaries), with one set of X
+  marks on the first line. The grid reconstruction correctly yields a
+  single tall box whose label is the three lines joined.
+- **Root cause:** the source table itself only rules the group as one row;
+  geometrically there is nothing to split on. Whether the X marks apply
+  to all three activities or just the first is a source-level ambiguity.
+- **Status:** faithfulness-first — kept as one logical row with the
+  joined verbatim label; no invented splits. Flagged as ambiguous-row
+  material for the schema phase (Phase 7).
+- **Real fix:** none in the extractor; resolution requires human/LLM
+  judgement, out of scope for the deterministic path.
+
+### 2026-08-29 — extractor: token fallback fabricates a pseudo-grid on free-text pages (protocol1 p52)
+- **What happened:** the locator's top candidate includes the heading-only
+  page (p52, no table). The ruled path finds no rules, and the token
+  fallback then clusters page furniture into a 4x7 pseudo-grid of junk
+  boxes containing header/footer text.
+- **Root cause:** the token fallback always *finds* some anchors — that is
+  its purpose (a real borderless table must never vanish) — so pages with
+  no table get phantom structure.
+- **Status:** accepted for now — the stitcher (Phase 6) must discard
+  fragments that share no row labels or column geometry with their
+  neighbours. The alternative (extractor dropping pages silently) would
+  be a recall hole, which is worse than junk that a later stage filters.
+- **Real fix:** if Phase 6 shows this filtering is unreliable, gate the
+  token path behind a minimum-evidence check (e.g. ≥2 rows carrying
+  short-token marks in aligned columns).
+
 <!--
 Template:
 
