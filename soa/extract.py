@@ -25,11 +25,13 @@ joined with spaces.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import pdfplumber
 
 MERGE_TOL = 1.5
+STROKE_TOL = 2.2  # stroke doubles sit <2pt apart; real columns and gutters are wider
 INTERIOR_EDGE_MAX = 0.35
 
 
@@ -79,12 +81,8 @@ class InterpretedPage:
     header_rows: int
     columns: list[ColumnMeta]
     rows: list[GridRow]
+    source: str = "rules"
 
-
-AXIS_LABELS = {
-    "ACTIVITY", "ASSESSMENT", "ASSESSMENTS", "PROCEDURE", "PROCEDURES",
-    "MEASURE", "MEASURES", "EVENT", "EVENTS", "EXAMINATION",
-}
 
 LEVEL_WORDS = {
     "PERIOD": "period", "PHASE": "period",
@@ -92,6 +90,19 @@ LEVEL_WORDS = {
     "WEEK": "day_week", "DAY": "day_week",
     "WINDOW": "window",
 }
+
+AXIS_WORDS = {
+    "ACTIVITY", "ASSESSMENT", "ASSESSMENTS", "PROCEDURE", "PROCEDURES",
+    "MEASURE", "MEASURES", "EVENT", "EVENTS", "EXAMINATION", "SCHEDULE",
+    "PHASE", "STUDY", "VISIT", "VISITS", "WEEK", "WEEKS", "DAY", "DAYS",
+    "DATE", "OF", "TIME", "TIMEPOINT",
+}
+
+MARKISH = re.compile(r"^[(\[]?[xXpP0-9]")
+
+
+def _markish(text: str) -> bool:
+    return bool(MARKISH.match(text)) and len(text) <= 8
 
 
 def _merge_positions(positions: list[float], tol: float = MERGE_TOL) -> list[float]:
@@ -102,6 +113,8 @@ def _merge_positions(positions: list[float], tol: float = MERGE_TOL) -> list[flo
             continue
         merged.append(pos)
     return merged
+
+
 
 
 def _band_of(position: float, boundaries: list[float]) -> int | None:
@@ -165,22 +178,23 @@ def _boxes_from_rules(page) -> PageGrid | None:
     if len(h_segs) < 3 or len(v_segs) < 3:
         return None
 
-    row_boundaries = _merge_positions([s[0] for s in h_segs])
-    col_boundaries = _merge_positions([s[0] for s in v_segs])
+    row_boundaries = _merge_positions([s[0] for s in h_segs], tol=STROKE_TOL)
+    col_boundaries = _merge_positions([s[0] for s in v_segs], tol=STROKE_TOL)
     if len(row_boundaries) < 3 or len(col_boundaries) < 3:
         return None
 
     boxes: list[Box] = []
     for ci in range(len(col_boundaries) - 1):
         cx0, cx1 = col_boundaries[ci], col_boundaries[ci + 1]
-        # Row boundaries *local to this column*: only h-rules overlapping the
-        # column span. Absent interior rules => one tall box (vertical merge).
+        # Row boundaries *local to this column*: only h-rules overlapping
+        # the column span. Absent interior rules => one tall box
+        # (a vertically merged cell).
         local = []
         for axis_pos, seg_lo, seg_hi in h_segs:
             overlap = min(seg_hi, cx1) - max(seg_lo, cx0)
             if overlap > 0.5 * (cx1 - cx0):
                 local.append(axis_pos)
-        local = _merge_positions(local)
+        local = _merge_positions(local, tol=STROKE_TOL)
         for ri in range(len(local) - 1):
             row_index = _band_of(local[ri], row_boundaries)
             if row_index is None:  # subset clustering drifted off the global grid
@@ -196,7 +210,6 @@ def _boxes_from_rules(page) -> PageGrid | None:
                 x0=cx0,
                 x1=cx1,
             ))
-
     boxes = _merge_adjacent_boxes(boxes, v_segs, col_boundaries)
     return PageGrid(
         page_number=page.page_number,
@@ -334,16 +347,54 @@ def interpret_grid(grid: PageGrid) -> InterpretedPage:
 
     row_indices = [ri for ri in range(max_row + 1) if ri in rows]
 
-    def label_of(ri: int) -> str:
-        return " ".join(b.text for b in rows[ri] if b.col_index == 0).strip()
+    # Label zone: label columns live left of the first column that carries
+    # mark-like cells (X, P, "1X", "(X", day numbers...) at least twice.
+    # Sponsors split the label column differently (p15 puts labels in c1,
+    # p12 in c0, p5 in c1), so the zone is computed, not assumed.
+    mark_counts: dict[int, int] = {}
+    for boxes in rows.values():
+        for box in boxes:
+            if box.text and _markish(box.text):
+                mark_counts[box.col_index] = mark_counts.get(box.col_index, 0) + 1
+    mark_cols = sorted(ci for ci, n in mark_counts.items() if n >= 2)
+    label_zone_end = mark_cols[0] if mark_cols else 1
 
+    def label_of(ri: int) -> str:
+        zone_boxes = [b for b in rows[ri] if b.text and b.col_index < label_zone_end]
+        zone_boxes.sort(key=lambda b: (b.col_index, b.x0))
+        return " ".join(b.text for b in zone_boxes).strip()
+
+    # Header block, scanned as a prefix:
+    #   stop  — wide-row category ("Screening" spanning all data columns)
+    #   stop  — first prose label (an assessment row)
+    #   pass  — captions ("Table 4"), axis words (ACTIVITY, STUDY DAY),
+    #           banner rows (text only outside the label zone), blank rows
+    # Verified against all five protocols' first pages on 2026-08-29.
     header_rows: list[int] = []
     for ri in row_indices:
-        label = label_of(ri).upper()
-        if not label or label in AXIS_LABELS:
+        texts = [b for b in rows[ri] if b.text]
+        label = label_of(ri)
+        non_label = [b for b in texts if b.col_index >= label_zone_end]
+        wide = any(
+            _box_column_span(b, grid.col_boundaries) >= max(3, n_cols - 3)
+            for b in texts
+        )
+        if label and wide and not non_label:
+            break  # wide category row: the data region begins here
+        if not label and texts:
+            header_rows.append(ri)  # banner row
+            continue
+        if not label and not texts:
+            header_rows.append(ri)  # blank band
+            continue
+        if re.match(r"(?i)^(table|page)\b", label):
+            header_rows.append(ri)  # running caption
+            continue
+        words = re.sub(r"[^A-Z ]", "", label.upper()).split()
+        if words and all(w in AXIS_WORDS for w in words):
             header_rows.append(ri)
-        else:
-            break
+            continue
+        break  # prose label: first assessment row
 
     data_rows = [ri for ri in row_indices if ri not in header_rows and ri > (header_rows[-1] if header_rows else -1)]
 
@@ -354,10 +405,16 @@ def interpret_grid(grid: PageGrid) -> InterpretedPage:
     for ri in header_rows:
         level = _row_level(rows[ri])
         for ci in range(1, n_cols):
+            zone_text = [
+                b.text for b in rows[ri] if b.text and b.col_index == ci
+            ]
+            if zone_text and ci < label_zone_end:
+                columns[ci].extra[ri] = " ".join(zone_text)
+                continue
             lo, hi = grid.col_boundaries[ci], grid.col_boundaries[ci + 1]
             texts = []
             for box in rows[ri]:
-                if box.col_index == 0:
+                if box.col_index < label_zone_end:
                     continue
                 if not box.text:
                     continue
@@ -381,7 +438,7 @@ def interpret_grid(grid: PageGrid) -> InterpretedPage:
     grid_rows: list[GridRow] = []
     for ri in data_rows:
         boxes = rows[ri]
-        non_label = [b for b in boxes if b.col_index > 0]
+        non_label = [b for b in boxes if b.col_index >= label_zone_end]
         cells = {b.col_index: b.text for b in non_label if b.text}
         label = label_of(ri)
         spanning = bool(boxes) and all(
@@ -391,10 +448,11 @@ def interpret_grid(grid: PageGrid) -> InterpretedPage:
         if not cells and label:
             if spanning:
                 kind, ambiguous = "category", False
-            elif not non_label:
-                kind, ambiguous = "category", True
             else:
-                kind, ambiguous = "assessment", False
+                # label-only row with no geometric span: may be a category
+                # header (protocol15) or an intentionally empty assessment
+                # (protocol1 p54). Never guessed: assessment, flagged.
+                kind, ambiguous = "assessment", True
         else:
             kind, ambiguous = "assessment", False
         grid_rows.append(GridRow(index=ri, kind=kind, label=label,
@@ -405,6 +463,7 @@ def interpret_grid(grid: PageGrid) -> InterpretedPage:
         header_rows=len(header_rows),
         columns=columns,
         rows=grid_rows,
+        source=grid.source,
     )
 
 

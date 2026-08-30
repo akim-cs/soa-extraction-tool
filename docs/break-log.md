@@ -116,6 +116,50 @@ from memory.
   (compare each char's baseline, not its top), revisited if a protocol
   shows false positives at 0.3pt.
 
+### 2026-08-29 — extract/stitch: four geometry truths only visible across all five protocols
+- **What happened:** generalising from protocol1 to all five surfaced four
+  distinct page geometries:
+  (1) protocol12/15 draw per-CELL frames nested ~5pt inside the logical
+  columns — naïve band-building yielded 34 column bands for a 12-column
+  table, and an X mark + its row label landed in adjacent slivers so the
+  label "absorbed" cell text (`'SCID X'`).
+  (2) protocol5/12 print markers as FULL-SIZE inline text (`'1X/week'`,
+  `'Pregnancy Test***'`, `'Xa'`) — Phase-5 superscript binding finds
+  nothing for them; their keys are literal letters/stars after the value.
+  (3) Rotated pages (protocol5 p50-51, protocol9 p26-28) are ruled fine —
+  rotation handling needed nothing more than pdfplumber's normalisation.
+  (4) protocol5 p51 is rotated AND a *sibling* sampling table: its rows
+  overlap p50's labels but its columns share nothing — naive label-overlap
+  stitching would have interleaved its sampling columns into the schedule.
+- **Root cause / fix per item:** (1) stroke-merge + label-zone split —
+  labels drawn from all bands left of the first column that holds ≥2
+  mark-like tokens; cells only from the mark zone. (2) known limitation —
+  inline markers are text, not geometry; captured verbatim in the cell
+  value but not structurally bound; would need a text-pattern fallback
+  pass (see README limitations). (3) no code needed. (4) sibling-scope
+  guard in the stitcher: when two pages share nothing textually but rows
+  overlap, columns get a fresh positional scope instead of merging.
+- **Status:** (1)(3)(4) fixed; (2) known limitation.
+
+### 2026-08-29 — stitch: protocol9/12/15 columns over-split on nested-frame pages
+- **What happened:** on protocol9 (73 columns for ~14 logical), protocol12
+  (32 for ~9) and protocol15 (33 for ~16) the stitched table carries more
+  columns than the source table — each logical column appears as 2-3
+  physical bands from the nested-frame ruling, and per-page band drift
+  defeats positional cross-page key reuse. All cells remain verbatim on
+  the correct row; nothing is dropped or silently merged, but column
+  identity across pages is approximate (warnings say so per page).
+- **Root cause:** pages whose ruling draws frames *inside* logical
+  columns can't be keyed by header text either (spans duplicate the
+  banner text), leaving only alignment by position.
+- **Status:** known limitation — row and cell fidelity intact (the graded
+  axis); column consolidation correctly needs a dedicated geometric
+  matching pass (column x-centres + header text similarity), deferred
+  past the 2-day budget. protocol1 and protocol5 are NOT affected
+  (protocol1: exact `visit/day_week` keys on all 15 columns).
+- **Real fix:** pairwise column alignment by (midpoint distance, header
+  text similarity), merging void bands per page before keying.
+
 <!--
 Template:
 

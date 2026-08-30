@@ -36,7 +36,19 @@ def test_header_row_count_and_row_kind(pages):
         assert page.header_rows == 2
         assert len(page.rows) == 28
         assert {r.kind for r in page.rows} == {"assessment"}
-        assert not any(r.ambiguous for r in page.rows)
+
+
+def test_empty_rows_flagged_ambiguous_never_guessed(pages):
+    # protocol1 has no category rows; rows that carry marks must never be
+    # flagged, and label-only rows (TTS Survey on p53, most rows on p54)
+    # are kept as assessments and flagged ambiguous.
+    for pageno in (53, 54):
+        page = pages[pageno]
+        for row in page.rows:
+            if row.cells:
+                assert not row.ambiguous, f"{row.label!r} carries marks"
+            else:
+                assert row.ambiguous, f"{row.label!r} is label-only"
 
 
 def test_visit_level_headers(pages):
