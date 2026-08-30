@@ -53,6 +53,46 @@ class PageGrid:
     boxes: list[Box] = field(default_factory=list)
 
 
+@dataclass
+class ColumnMeta:
+    index: int
+    period: str | None = None
+    visit: str | None = None
+    day_week: str | None = None
+    window: str | None = None
+    extra: dict[int, str] = field(default_factory=dict)  # unassigned header text, keyed by header row
+
+
+@dataclass
+class GridRow:
+    index: int
+    kind: str  # "category" | "assessment"
+    label: str
+    ambiguous: bool = False
+    cells: dict[int, str] = field(default_factory=dict)  # column band index -> text
+
+
+@dataclass
+class InterpretedPage:
+    page_number: int
+    header_rows: int
+    columns: list[ColumnMeta]
+    rows: list[GridRow]
+
+
+AXIS_LABELS = {
+    "ACTIVITY", "ASSESSMENT", "ASSESSMENTS", "PROCEDURE", "PROCEDURES",
+    "MEASURE", "MEASURES", "EVENT", "EVENTS", "EXAMINATION",
+}
+
+LEVEL_WORDS = {
+    "PERIOD": "period", "PHASE": "period",
+    "VISIT": "visit", "VISITS": "visit",
+    "WEEK": "day_week", "DAY": "day_week",
+    "WINDOW": "window",
+}
+
+
 def _merge_positions(positions: list[float], tol: float = MERGE_TOL) -> list[float]:
     """Cluster near-identical coordinates (stroke pairs, duplicate edges)."""
     merged: list[float] = []
@@ -141,8 +181,14 @@ def _boxes_from_rules(page) -> PageGrid | None:
                 local.append(axis_pos)
         local = _merge_positions(local)
         for ri in range(len(local) - 1):
+            row_index = _band_of(local[ri], row_boundaries)
+            if row_index is None:  # subset clustering drifted off the global grid
+                row_index = min(
+                    range(len(row_boundaries)),
+                    key=lambda i: abs(row_boundaries[i] - local[ri]),
+                )
             boxes.append(Box(
-                row_index=_band_of(local[ri], row_boundaries) or 0,
+                row_index=row_index,
                 col_index=ci,
                 top=local[ri],
                 bottom=local[ri + 1],
@@ -248,6 +294,117 @@ def extract_grid(pdf_path: str, candidate) -> list[PageGrid]:
             if grid is not None:
                 grids.append(grid)
     return grids
+
+
+def _box_column_span(box: Box, col_boundaries: list[float]) -> int:
+    """Number of column bands the box covers (1 = normal cell)."""
+    covered = 0
+    for i in range(len(col_boundaries) - 1):
+        lo, hi = col_boundaries[i], col_boundaries[i + 1]
+        overlap = min(box.x1, hi) - max(box.x0, lo)
+        if overlap > 0.5 * (hi - lo) and overlap > 2:
+            covered += 1
+    return covered
+
+
+def _row_level(row_boxes: list[Box]) -> str | None:
+    text = " ".join(b.text.upper() for b in row_boxes)
+    for word, level in LEVEL_WORDS.items():
+        if word in text.split():
+            return level
+    return None
+
+
+def interpret_grid(grid: PageGrid) -> InterpretedPage:
+    """Attach hierarchical column headers and row kinds to a raw PageGrid.
+
+    Header rows = the contiguous top block whose rows have an empty label
+    cell or an axis label (ACTIVITY, VISIT, ...); everything below is data.
+    Category rows = rows whose cells are entirely empty AND whose label
+    geometrically spans (or nearly spans) the table width — a spanning
+    ruled box, never a text-length guess. Ambiguous rows (empty label in
+    c0 with a short label and no cells) are flagged, never guessed.
+    """
+    n_cols = len(grid.col_boundaries) - 1
+    rows: dict[int, list[Box]] = {}
+    for box in grid.boxes:
+        rows.setdefault(box.row_index, []).append(box)
+    max_row = max(rows, default=-1)
+
+    row_indices = [ri for ri in range(max_row + 1) if ri in rows]
+
+    def label_of(ri: int) -> str:
+        return " ".join(b.text for b in rows[ri] if b.col_index == 0).strip()
+
+    header_rows: list[int] = []
+    for ri in row_indices:
+        label = label_of(ri).upper()
+        if not label or label in AXIS_LABELS:
+            header_rows.append(ri)
+        else:
+            break
+
+    data_rows = [ri for ri in row_indices if ri not in header_rows and ri > (header_rows[-1] if header_rows else -1)]
+
+    # Column header stack: per column, per header row, the text of boxes that
+    # span-cover that column band. Level inferred from axis words in the row;
+    # unmatched rows land in extra rather than being dropped.
+    columns: list[ColumnMeta] = [ColumnMeta(index=i) for i in range(n_cols)]
+    for ri in header_rows:
+        level = _row_level(rows[ri])
+        for ci in range(1, n_cols):
+            lo, hi = grid.col_boundaries[ci], grid.col_boundaries[ci + 1]
+            texts = []
+            for box in rows[ri]:
+                if box.col_index == 0:
+                    continue
+                if not box.text:
+                    continue
+                if _box_column_span(box, grid.col_boundaries) == 1 and box.col_index != ci:
+                    continue
+                if box.col_index > ci:
+                    break
+                overlap = min(box.x1, hi) - max(box.x0, lo)
+                if overlap > 0.5 * (hi - lo) and overlap > 2:
+                    texts.append(box.text)
+            if not texts:
+                continue
+            text = " ".join(texts)
+            if level is None:
+                columns[ci].extra[ri] = text
+            elif getattr(columns[ci], level) is None:
+                setattr(columns[ci], level, text)
+            else:
+                setattr(columns[ci], level, f"{getattr(columns[ci], level)} {text}")
+
+    grid_rows: list[GridRow] = []
+    for ri in data_rows:
+        boxes = rows[ri]
+        non_label = [b for b in boxes if b.col_index > 0]
+        cells = {b.col_index: b.text for b in non_label if b.text}
+        label = label_of(ri)
+        spanning = bool(boxes) and all(
+            _box_column_span(b, grid.col_boundaries) >= n_cols - 2
+            for b in boxes
+        )
+        if not cells and label:
+            if spanning:
+                kind, ambiguous = "category", False
+            elif not non_label:
+                kind, ambiguous = "category", True
+            else:
+                kind, ambiguous = "assessment", False
+        else:
+            kind, ambiguous = "assessment", False
+        grid_rows.append(GridRow(index=ri, kind=kind, label=label,
+                                 ambiguous=ambiguous, cells=cells))
+
+    return InterpretedPage(
+        page_number=grid.page_number,
+        header_rows=len(header_rows),
+        columns=columns,
+        rows=grid_rows,
+    )
 
 
 def main() -> None:
