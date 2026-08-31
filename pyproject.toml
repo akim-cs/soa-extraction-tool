@@ -23,6 +23,7 @@ ocr = ["ocrmypdf>=16"]
 soa-triage = "soa.triage:main"
 soa-locate = "soa.locate:main"
 soa-extract = "soa.extract:main"
+soa-run = "soa.pipeline:main"
 
 [tool.setuptools]
 packages = ["soa"]
