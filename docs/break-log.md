@@ -160,6 +160,23 @@ from memory.
 - **Real fix:** pairwise column alignment by (midpoint distance, header
   text similarity), merging void bands per page before keying.
 
+### 2026-09-01 — phase 9 verification: committed outputs are reproducible; row-level spot checks pass
+- **What happened:** Phase 9 re-verified the five committed outputs at the
+  iteration-mark state (regenerate-step fixes already committed).
+  (1) Fresh `soa.pipeline.run` on all five protocols reproduces every byte
+  of the committed `outputs/*.json` — the committed files are exactly what
+  the current code emits, no staleness from later commits.
+  (2) Row-level eyeball: each table's first three row labels (+ X marks)
+  were cross-checked against the raw PDF text of the indexed location
+  page via an independent `page.extract_text()` — all five match
+  (protocol1 p53 "Informed consent X / Patient number assigned X /
+  Hachinski ≤4 X"; protocol5 p50 rotated, same pattern; protocol9/12/15
+  labels found on their first table pages).
+- **Root cause:** n/a (verification pass, not a failure).
+- **Status:** verification recorded; the over-split columns above remain
+  the pipeline's one known structural limitation.
+- **Real fix:** none; generalisation check on unseen protocols is deferred.
+
 <!--
 Template:
 
