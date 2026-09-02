@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoA Extraction Tool</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; color: #1a1a1a; background: #fafafa; }
+  header { background: #1f2937; color: #fff; padding: 14px 24px; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  main { max-width: 1400px; margin: 0 auto; padding: 16px 24px 64px; }
+  .panel { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+           padding: 14px 16px; margin-bottom: 16px; }
+  .panel h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase;
+              letter-spacing: .04em; color: #6b7280; }
+  .btn, .filebtn { font: inherit; border: 1px solid #d1d5db; border-radius: 6px;
+                   padding: 6px 12px; background: #fff; cursor: pointer; }
+  .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .examples button { margin: 0 8px 8px 0; }
+  #status { margin-top: 8px; }
+  #status.error { color: #b91c1c; }
+  #status.loading { color: #1d4ed8; }
+  .verdict { font-size: 13px; color: #6b7280; margin: 4px 0 12px; }
+  .warn { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px;
+          padding: 8px 10px; margin: 10px 0; font-size: 13px; }
+  .warn h3, .notes h3, .evidence h3 { margin: 0 0 6px; font-size: 12px;
+          text-transform: uppercase; color: #92400e; letter-spacing: .04em; }
+  .evidence h3 { color: #6b7280; }
+  .notes h3 { color: #065f46; }
+  .notes { background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px;
+           padding: 8px 10px; margin: 10px 0; font-size: 13px; }
+  .evidence { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;
+              padding: 8px 10px; margin: 10px 0; font-size: 12px; }
+  ul.tight { margin: 0; padding-left: 18px; }
+  table.soa { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+  table.soa th, table.soa td { border: 1px solid #d1d5db; padding: 4px 8px;
+                               vertical-align: top; }
+  table.soa thead th { background: #f3f4f6; font-weight: 600; white-space: nowrap; }
+  table.soa thead th.void { background: #f9fafb; color: #9ca3af; }
+  table.soa thead th.level { background: #e5e7eb; font-size: 11px; color: #6b7280;
+                             text-transform: uppercase; }
+  table.soa tbody th.label { text-align: left; font-weight: 500;
+                             min-width: 220px; max-width: 380px; }
+  table.soa tr.category th { background: #e0e7ff; font-weight: 600;
+                             text-align: left; }
+  .ambiguous { background: #fff7ed !important; }
+  .badge { display: inline-block; margin-left: 6px; padding: 0 5px;
+           border-radius: 999px; font-size: 11px; background: #f97316;
+           color: #fff; vertical-align: middle; }
+  sup.mk { color: #1d4ed8; font-weight: 700; cursor: help;
+           border-bottom: 1px dotted #1d4ed8; }
+  .docmeta { font-size: 13px; color: #374151; }
+  table-wrap { display: block; overflow-x: auto; }
+  .empty { color: #9ca3af; font-style: italic; }
+</style>
+</head>
+<body>
+<header><h1>SoA Extraction Tool</h1></header>
+<main>
+  <div class="panel">
+    <h2>Upload a protocol PDF</h2>
+    <input type="file" id="file" accept=".pdf,application/pdf">
+    <button class="btn primary" id="upload" disabled>Extract SoA</button>
+    <div id="status"></div>
+  </div>
+  <div class="panel examples">
+    <h2>Committed examples</h2>
+    <div id="exampleList"><span class="empty">loading…</span></div>
+  </div>
+  <div id="result"></div>
+</main>
+
+<script>
+const LEVELS = ["period", "visit", "day_week", "window"];
+const LEVEL_LABELS = {period: "Period", visit: "Visit", day_week: "Day/Week",
+                      window: "Window"};
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function footnoteByMarker(table) {
+  const map = {};
+  for (const fn of (table.footnotes || [])) if (fn.marker) map[fn.marker] = fn;
+  return map;
+}
+
+function renderCell(td, cell, fnMap) {
+  const wrap = el("span");
+  wrap.textContent = cell.value;
+  td.appendChild(wrap);
+  if (cell.ambiguous) td.classList.add("ambiguous");
+  if (!cell.markers || !cell.markers.length) return;
+  const tooltips = [], ids = [];
+  for (const m of cell.markers) {
+    ids.push(m);
+    const fn = fnMap[m];
+    tooltips.push(fn ? `${fn.marker}: ${fn.text}` : `marker ${m} (no footnote text found)`);
+  }
+  const sup = el("sup", "mk", ids.join(""));
+  sup.title = tooltips.join("\n");
+  td.appendChild(sup);
+}
+
+function renderTable(table) {
+  const sections = el("section");
+  const pages = (table.location && table.location.pages || []);
+  sections.appendChild(el("h3", null,
+    `Table #${table.id} — pdf pages ${pages.join(", ")}`));
+
+  const cols = table.column_headers || [];
+  const grid = el("table", "soa");
+  const wrap = el("table-wrap");
+  wrap.appendChild(grid);
+
+  // Header rows: one per level that at least one column populates.
+  const activeLevels = LEVELS.filter(lv => cols.some(c => c[lv] != null));
+  if (cols.some(c => c.extra && Object.keys(c.extra).length)) activeLevels.push("extra");
+  const thead = el("thead");
+  for (const lv of activeLevels) {
+    const tr = el("tr");
+    tr.appendChild(el("th", "level", LEVEL_LABELS[lv] || lv));
+    for (const c of cols) {
+      let val = "";
+      if (lv === "extra") val = Object.values(c.extra || {}).join(" ");
+      else if (c[lv] != null) val = String(c[lv]);
+      const th = el("th", c.void ? "void" : null, val);
+      tr.appendChild(th);
+    }
+    thead.appendChild(tr);
+  }
+  grid.appendChild(thead);
+
+  const fnMap = footnoteByMarker(table);
+  const tbody = el("tbody");
+  for (const row of (table.rows || [])) {
+    const tr = el("tr");
+    if (row.kind === "category") {
+      const th = el("th", null, row.label);
+      th.colSpan = cols.length + 1;
+      tr.classList.add("category");
+      tr.appendChild(th);
+    } else {
+      const th = el("th", "label");
+      th.textContent = row.label;
+      if (row.ambiguous) th.appendChild(el("span", "badge", "ambiguous"));
+      tr.appendChild(th);
+      const byCol = {};
+      for (const cell of (row.cells || [])) byCol[cell.column_index] = cell;
+      for (const c of cols) {
+        const td = el("td");
+        const cell = byCol[c.index];
+        if (cell) renderCell(td, cell, fnMap);
+        if (c.void) td.classList.add("ambiguous");
+        tr.appendChild(td);
+      }
+    }
+    if (row.ambiguous) tr.classList.add("ambiguous");
+    tbody.appendChild(tr);
+  }
+  grid.appendChild(tbody);
+  sections.appendChild(wrap);
+
+  if ((table.warnings || []).length) {
+    const w = el("div", "warn");
+    w.appendChild(el("h3", null, "Warnings"));
+    const ul = el("ul", "tight");
+    for (const msg of table.warnings) ul.appendChild(el("li", null, msg));
+    w.appendChild(ul);
+    sections.appendChild(w);
+  }
+  if ((table.footnotes || []).length) {
+    const n = el("div", "notes");
+    n.appendChild(el("h3", null, "Footnotes"));
+    const ul = el("ul", "tight");
+    for (const fn of table.footnotes) {
+      const label = fn.marker ? `[${fn.marker}] ` : `#${fn.id} `;
+      let meta = `pages ${(fn.source_pages || []).join(", ")}`;
+      if (fn.continued_on_page) meta += `; continued on page ${fn.continued_on_page}`;
+      const li = el("li");
+      const b = el("strong", null, label);
+      li.appendChild(b);
+      li.appendChild(document.createTextNode(`${fn.text} `));
+      li.appendChild(el("span", "verdict", `(${meta})`));
+      ul.appendChild(li);
+    }
+    n.appendChild(ul);
+    sections.appendChild(n);
+  }
+  if ((table.locator_evidence || []).length) {
+    const e = el("div", "evidence");
+    e.appendChild(el("h3", null, "Locator evidence"));
+    const ul = el("ul", "tight");
+    for (const ev of table.locator_evidence) ul.appendChild(el("li", null, ev));
+    e.appendChild(ul);
+    sections.appendChild(e);
+  }
+  return sections;
+}
+
+function render(doc) {
+  const root = document.getElementById("result");
+  root.replaceChildren();
+  const panel = el("div", "panel");
+  const tables = doc.tables || [];
+  panel.appendChild(el("h2", null, "Extraction result"));
+  panel.appendChild(el("p", "docmeta",
+    `${doc.document.file} (${doc.document.pages} pages) — schema ${doc.schema_version}` +
+    ` — ${tables.length} table(s), ` +
+    `${tables.reduce((n, t) => n + (t.rows || []).length, 0)} rows`));
+  if (!tables.length) panel.appendChild(el("p", "empty", "No SoA table found in this document."));
+  for (const t of tables) panel.appendChild(renderTable(t));
+  root.appendChild(panel);
+}
+
+const status = document.getElementById("status");
+function busy(msg) { status.className = "loading"; status.textContent = msg; }
+function fail(msg) { status.className = "error"; status.textContent = msg; }
+function ok(msg) { status.className = ""; status.textContent = msg; }
+
+async function loadJSON(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try { detail = (await res.json()).detail || detail; } catch (e) { /* non-JSON body */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+document.getElementById("file").addEventListener("change", (e) => {
+  document.getElementById("upload").disabled = !e.target.files.length;
+});
+
+document.getElementById("upload").addEventListener("click", async () => {
+  const input = document.getElementById("file");
+  if (!input.files.length) return;
+  const btn = document.getElementById("upload");
+  btn.disabled = true;
+  busy("Running the extraction pipeline — this can take a minute on large protocols…");
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  try {
+    const doc = await loadJSON("/api/extract", {method: "POST", body: form});
+    render(doc);
+    ok("Done.");
+  } catch (err) {
+    fail(`Extraction failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+(async () => {
+  const list = document.getElementById("exampleList");
+  try {
+    const {examples} = await loadJSON("/api/examples");
+    list.replaceChildren();
+    if (!examples.length) { list.appendChild(el("span", "empty", "none found in outputs/")); return; }
+    for (const name of examples) {
+      const b = el("button", "btn", `${name}.pdf (committed output)`);
+      b.addEventListener("click", async () => {
+        try { render(await loadJSON(`/api/examples/${name}.json`)); }
+        catch (err) { fail(`Could not load ${name}: ${err.message}`); }
+      });
+      list.appendChild(b);
+    }
+  } catch (err) {
+    list.replaceChildren(el("span", "empty", `could not list examples: ${err.message}`));
+  }
+})();
+</script>
+</body>
+</html>
