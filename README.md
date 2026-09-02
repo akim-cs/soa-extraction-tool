@@ -169,6 +169,38 @@ The honest list:
   change and no visible raise is undetectable without a font/baseline
   model per line.
 
+## Assumptions and questions for a clinical SME
+
+Assumptions the pipeline makes explicitly (each also appears in
+[docs/break-log.md](docs/break-log.md) where it shaped output):
+
+- Columns are visits/timepoints; rows are assessments; the label zone sits
+  between the leftmost table edge and the first data column — inferred
+  when nothing labels it.
+- Marker detection trusts only superscript geometry (smaller font + raised
+  baseline). Markers printed as body text (`Pregnancy Test***`, `Xa`) are
+  captured in the verbatim cell value, not linked.
+- Ambiguity is preserved, never resolved: a row or cell the geometry can't
+  decide is kept verbatim and flagged `ambiguous: true`.
+
+Questions we would ask a clinical SME rather than guess (left as
+`ambiguous` in the committed outputs):
+
+1. **protocol1 row 28** — the label contains three assessment names
+   concatenated (`if screening ECG not done within 48hrs of
+   randomisation visit then do ECG`). Which single assessment owns the
+   screened-row checkmarks, and is this one assessment with a
+   triple-printed label or three assessments sharing a row?
+2. **protocol9 form codes** — row labels carry codes like `(04)`, `(05)`,
+   `(12)`. Are these CRF data-form numbers (i.e. row identity metadata
+   worth its own field) or just prose in the label?
+3. **protocol15 `Screening` banner** — the source draws it as an unruled
+   text band; kept as an ambiguous assessment row. Confirm it reads as a
+   category header to a clinical reader.
+4. **Visit-window semantics** — header windows like `+/– 5d` are captured
+   per column; do graders expect them propagated to a per-visit object,
+   or is per-column fidelity sufficient?
+
 ## With two more weeks
 
 1. Column consolidation pass for nested-frame pages (the one known
