@@ -35,6 +35,8 @@
   .evidence { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;
               padding: 8px 10px; margin: 10px 0; font-size: 12px; }
   ul.tight { margin: 0; padding-left: 18px; }
+  ul.tight ul { margin-top: 2px; }
+  details > summary { cursor: pointer; font-weight: 600; }
   table.soa { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
   table.soa th, table.soa td { border: 1px solid #d1d5db; padding: 4px 8px;
                                vertical-align: top; }
@@ -89,6 +91,21 @@ function footnoteByMarker(table) {
   const map = {};
   for (const fn of (table.footnotes || [])) if (fn.marker) map[fn.marker] = fn;
   return map;
+}
+
+// Group audit-trail notes by their template (location prefix and numbers
+// stripped) so 60 single-decision lines render as a few countable groups.
+// Prefix grammar: "page[s] N[, -M][ row R ('label')]:" — the label can
+// itself contain colons, so it is matched as a quoted unit first.
+const WARN_PREFIX = /^pages? [0-9, -]+(?: row \d+ \((?:'[^']*'|"[^"]*")\))?:\s*/;
+function groupWarnings(warnings) {
+  const groups = new Map();
+  for (const w of warnings) {
+    const key = w.replace(WARN_PREFIX, "").replace(/\d+/g, "#");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(w);
+  }
+  return [...groups.entries()].sort((a, b) => b[1].length - a[0].length);
 }
 
 function renderCell(td, cell, fnMap) {
@@ -169,9 +186,24 @@ function renderTable(table) {
 
   if ((table.warnings || []).length) {
     const w = el("div", "warn");
-    w.appendChild(el("h3", null, "Warnings"));
+    w.appendChild(el("h3", null, `Warnings (${table.warnings.length})`));
     const ul = el("ul", "tight");
-    for (const msg of table.warnings) ul.appendChild(el("li", null, msg));
+    for (const [key, items] of groupWarnings(table.warnings)) {
+      const li = el("li");
+      if (items.length === 1) {
+        li.textContent = items[0];
+      } else {
+        const det = document.createElement("details");
+        const sum = document.createElement("summary");
+        sum.textContent = `${items.length}× ${key}`;
+        det.appendChild(sum);
+        const inner = el("ul", "tight");
+        for (const msg of items) inner.appendChild(el("li", null, msg));
+        det.appendChild(inner);
+        li.appendChild(det);
+      }
+      ul.appendChild(li);
+    }
     w.appendChild(ul);
     sections.appendChild(w);
   }
